@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-"""意图识别模块。"""
+"""基于大模型的多轮意图识别模块。"""
 
-from app.core.intent.recognizer import IntentRecognizer, IntentResult
+from app.core.intent.recognizer import DEFAULT_INTENT_TAXONOMY, IntentRecognizer, IntentResult
 
-__all__ = ["IntentRecognizer", "IntentResult"]
+__all__ = ["DEFAULT_INTENT_TAXONOMY", "IntentRecognizer", "IntentResult"]

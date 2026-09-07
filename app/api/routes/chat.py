@@ -21,22 +21,31 @@ from app.models.schemas import ChatRequest, ChatResponse
 router = APIRouter(tags=["chat"])
 
 _tracer = Tracer()
-_intent = IntentRecognizer()
 
 
-def _build_router() -> ModelRouter:
+def _build_router(model_id: str | None = None) -> ModelRouter:
     """根据配置构造模型路由器。"""
     settings = get_settings()
     if not settings.openai_api_key:
         raise HTTPException(status_code=503, detail="未配置 OPENAI_API_KEY，无法调用模型")
     cfg = ModelConfig(
-        model_id=settings.openai_model,
+        model_id=model_id or settings.openai_model,
         api_key=settings.openai_api_key,
         base_url=settings.openai_api_base or None,
         priority=0,
         weight=1.0,
     )
     return ModelRouter([cfg])
+
+
+def _build_intent_recognizer() -> IntentRecognizer:
+    """创建使用配置模型的多轮意图分类器。"""
+    settings = get_settings()
+    return IntentRecognizer(
+        _build_router(settings.intent_model or settings.openai_model),
+        confidence_threshold=settings.intent_confidence_threshold,
+        max_history_messages=settings.intent_history_messages,
+    )
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -46,9 +55,11 @@ async def chat(request: ChatRequest) -> ChatResponse:
     span = _tracer.start_trace(trace_id, "chat")
 
     try:
-        user_text = request.messages[-1].content if request.messages else ""
-        intent = await _intent.recognize(user_text)
-        clarify = await _intent.clarify(user_text, intent)
+        user_text = request.messages[-1].content
+        messages = [m.model_dump() for m in request.messages]
+        intent_recognizer = _build_intent_recognizer()
+        intent = await intent_recognizer.recognize(messages=messages)
+        clarify = await intent_recognizer.clarify(user_text, intent)
         logger.info(
             "意图 intent={} conf={} sub={}",
             intent.intent,
@@ -57,13 +68,13 @@ async def chat(request: ChatRequest) -> ChatResponse:
         )
 
         router_llm = _build_router()
-        messages = [m.model_dump() for m in request.messages]
-        if clarify and intent.confidence < _intent.confidence_threshold:
-            messages.append(
+        if clarify:
+            messages.insert(
+                0,
                 {
                     "role": "system",
                     "content": f"（系统提示：{clarify}）",
-                }
+                },
             )
 
         resp = await router_llm.chat(
@@ -75,7 +86,13 @@ async def chat(request: ChatRequest) -> ChatResponse:
 
         _tracer.end_span(
             span,
-            result={"model": resp.model_id, "usage": resp.usage},
+            result={
+                "model": resp.model_id,
+                "usage": resp.usage,
+                "intent": intent.intent,
+                "sub_intent": intent.sub_intent,
+                "intent_confidence": intent.confidence,
+            },
         )
 
         return ChatResponse(
@@ -111,6 +128,19 @@ async def _stream_generator(
     model = request.model or settings.openai_model
 
     try:
+        user_text = request.messages[-1].content
+        intent_recognizer = _build_intent_recognizer()
+        intent = await intent_recognizer.recognize(messages=messages)
+        clarify = await intent_recognizer.clarify(user_text, intent)
+        logger.info(
+            "流式意图 intent={} conf={} sub={}",
+            intent.intent,
+            intent.confidence,
+            intent.sub_intent,
+        )
+        if clarify:
+            messages.insert(0, {"role": "system", "content": f"（系统提示：{clarify}）"})
+
         stream = await client.chat.completions.create(
             model=model,
             messages=messages,

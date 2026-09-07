@@ -26,6 +26,22 @@ class Settings(BaseSettings):
         description="OpenAI 兼容 API Base",
     )
     openai_model: str = Field(default="gpt-4o-mini", description="默认对话模型")
+    intent_model: str = Field(
+        default="",
+        description="意图识别模型；留空时复用 OPENAI_MODEL",
+    )
+    intent_confidence_threshold: float = Field(
+        default=0.55,
+        ge=0.0,
+        le=1.0,
+        description="低于该值时要求澄清",
+    )
+    intent_history_messages: int = Field(
+        default=12,
+        ge=1,
+        le=100,
+        description="意图模型使用的最近对话消息数",
+    )
 
     database_url: str = Field(
         default="postgresql+asyncpg://postgres:postgres@localhost:5432/agent_db",
